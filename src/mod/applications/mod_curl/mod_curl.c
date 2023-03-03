@@ -414,10 +414,36 @@ static size_t http_sendfile_response_callback(void *ptr, size_t size, size_t nme
 	return realsize;
 }
 
+static switch_curl_slist_t *sendfile_md5_form_header(const char *fpath)
+{
+	char md5_header[256] = { 0 };
+	char md5_str[SWITCH_MD5_DIGEST_STRING_SIZE];
+	switch (switch_file_md5_string(md5_str, fpath)) {
+
+	case SWITCH_STATUS_FALSE:
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "MD5 caculate failed, maybe open or read file failed.");
+		return NULL;
+
+	case SWITCH_STATUS_NOTIMPL:
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_WARNING, "MD5 is not implemented, please check md5 library.");
+		return NULL;
+
+	case SWITCH_STATUS_SUCCESS:
+		break;
+
+	default:
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Unexpected result of switch_file_md5_string got!!!");
+		return NULL;
+	}
+	sprintf(md5_header, "Content-MD5: %s", md5_str);
+	return curl_slist_append(NULL, md5_header);
+}
+
 // This function and do_lookup_url functions could possibly be merged together.  Or at least have do_lookup_url call this up as part of the initialization routine as it is a subset of the operations.
 static void http_sendfile_initialize_curl(http_sendfile_data_t *http_data)
 {
 	uint8_t count;
+	switch_curl_slist_t *extra_form_headers = NULL;
 	http_data->curl_handle = curl_easy_init();
 
 	if (!strncasecmp(http_data->url, "https", 5))
@@ -456,9 +482,6 @@ static void http_sendfile_initialize_curl(http_sendfile_data_t *http_data)
 	curl_easy_setopt(http_data->curl_handle, CURLOPT_WRITEFUNCTION, http_sendfile_response_callback);
 	curl_easy_setopt(http_data->curl_handle, CURLOPT_WRITEDATA, (void *) http_data);
 
-	/* Add the file to upload as a POST form field */
-	curl_formadd(&http_data->formpost, &http_data->lastptr, CURLFORM_COPYNAME, http_data->filename_element_name, CURLFORM_FILE, http_data->filename_element, CURLFORM_END);
-
 	if(!zstr(http_data->extrapost_elements))
 	{
 		// Now to parse out the individual post element/value pairs
@@ -481,6 +504,11 @@ static void http_sendfile_initialize_curl(http_sendfile_data_t *http_data)
 		}
 	}
 
+	/* Add the file to upload as a POST form field */
+	extra_form_headers = sendfile_md5_form_header(http_data->filename_element);
+	curl_formadd(&http_data->formpost, &http_data->lastptr, CURLFORM_COPYNAME, http_data->filename_element_name, CURLFORM_FILE, http_data->filename_element,
+			CURLFORM_CONTENTHEADER, extra_form_headers, CURLFORM_END);
+
 	/* Fill in the submit field too, even if this isn't really needed */
 	curl_formadd(&http_data->formpost, &http_data->lastptr, CURLFORM_COPYNAME, "submit", CURLFORM_COPYCONTENTS, "or_die", CURLFORM_END);
 
@@ -495,6 +523,7 @@ static void http_sendfile_initialize_curl(http_sendfile_data_t *http_data)
 
 	// Clean up the form data from POST
 	curl_formfree(http_data->formpost);
+	switch_curl_slist_free_all(extra_form_headers);
 }
 
 static switch_status_t http_sendfile_test_file_open(http_sendfile_data_t *http_data, switch_event_t *event)

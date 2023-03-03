@@ -281,3 +281,7 @@ images/test_text.png
 
 src/mod/codecs/mod_amrwb/test/test_amrwb
 src/mod/endpoints/mod_sofia/test/sipp-based-tests
+compile_commands.json
+src/mod/formats/mod_opusfile/test/test_opusfile
+tests/unit/switch_core_asr
+tests/unit/switch_sip

@@ -577,6 +577,7 @@ SWITCH_DECLARE(switch_status_t) switch_uuid_parse(switch_uuid_t *uuid, const cha
  */
 SWITCH_DECLARE(switch_status_t) switch_md5(unsigned char digest[SWITCH_MD5_DIGESTSIZE], const void *input, switch_size_t inputLen);
 SWITCH_DECLARE(switch_status_t) switch_md5_string(char digest_str[SWITCH_MD5_DIGEST_STRING_SIZE], const void *input, switch_size_t inputLen);
+SWITCH_DECLARE(switch_status_t) switch_file_md5_string(char digest_str[SWITCH_MD5_DIGEST_STRING_SIZE], const char *fpath);
 
 /** @} */
 

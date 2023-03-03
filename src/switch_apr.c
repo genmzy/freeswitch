@@ -1206,6 +1206,76 @@ SWITCH_DECLARE(switch_status_t) switch_md5_string(char digest_str[SWITCH_MD5_DIG
 	return status;
 }
 
+SWITCH_DECLARE(switch_status_t) switch_file_md5_string(char digest_str[SWITCH_MD5_DIGEST_STRING_SIZE], const char *fpath)
+{
+	short i, x;
+	int fd;
+	uint8_t b;
+	int nread;
+	unsigned char data[1024];
+	unsigned char digest[SWITCH_MD5_DIGESTSIZE];
+
+#if !(defined(HAVE_LIBMD5) || defined(HAVE_LIBMD) || defined(HAVE_MD5INIT) || defined (HAVE_LIBCRYPTO))
+	return SWITCH_STATUS_NOTIMPL;
+#else
+
+	MD5_CTX md5_context;
+
+/* md5 init {{{ */
+#if defined (HAVE_LIBCRYPTO) /* openssl */
+	MD5_Init(&md5_context);
+#else
+	MD5Init(&md5_context);
+#endif
+/* }}} md5 init */
+
+	fd = open(fpath, O_RDONLY);
+	if (-1 == fd) {
+		return SWITCH_STATUS_FALSE;
+	}
+
+	for ( ; /* void */; ) {
+		nread = read(fd, data, 1024);
+		if (-1 == nread) {
+			close(fd);
+			return SWITCH_STATUS_FALSE;
+		}
+
+/* md5 update {{{ */
+#if defined (HAVE_LIBCRYPTO) /* openssl */
+		MD5_Update(&md5_context, data, nread);
+#else
+		MD5Update(&md5_context, data, nread);
+#endif
+/* }}} md5 update */
+
+		if (0 == nread || nread < 1024) { break; }
+	}
+
+	close(fd);
+
+/* md5 final {{{ */
+#if defined (HAVE_LIBCRYPTO) /* openssl */
+	MD5_Final(digest, &md5_context);
+#else
+	MD5Final(digest, &md5_context);
+#endif
+/* }}} md5 final */
+
+	digest_str[SWITCH_MD5_DIGEST_STRING_SIZE - 1] = '\0';
+
+	for (x = i = 0; x < SWITCH_MD5_DIGESTSIZE; x++) {
+		b = (digest[x] >> 4) & 15;
+		digest_str[i++] = b + (b > 9 ? 'a' - 10 : '0');
+		b = digest[x] & 15;
+		digest_str[i++] = b + (b > 9 ? 'a' - 10 : '0');
+	}
+	digest_str[i] = '\0';
+
+	return SWITCH_STATUS_SUCCESS;
+#endif
+}
+
 /* FIFO queues (apr-util) */
 
 SWITCH_DECLARE(switch_status_t) switch_queue_create(switch_queue_t ** queue, unsigned int queue_capacity, switch_memory_pool_t *pool)

@@ -51,3 +51,4 @@ conf_async/*/
 x64
 win32
 *.vcxproj.user
+.cache
