@@ -16,6 +16,7 @@
  * $Id: mrcp_sofiasip_client_agent.c 2253 2014-11-21 02:57:19Z achaloyan@gmail.com $
  */
 
+#include "sofia-sip/su_tag.h"
 typedef struct mrcp_sofia_agent_t mrcp_sofia_agent_t;
 #define NUA_MAGIC_T mrcp_sofia_agent_t
 
@@ -24,6 +25,7 @@ typedef struct mrcp_sofia_session_t mrcp_sofia_session_t;
 
 #include <sofia-sip/su.h>
 #include <sofia-sip/nua.h>
+#include <sofia-sip/su_log.h>
 #include <sofia-sip/sip_status.h>
 #include <sofia-sip/sip_header.h>
 #include <sofia-sip/sdp.h>
@@ -32,12 +34,16 @@ typedef struct mrcp_sofia_session_t mrcp_sofia_session_t;
 #undef strcasecmp
 #undef strncasecmp
 #include <apr_general.h>
+#include <apr_time.h>
+#include <apr_thread_proc.h>
+#include <apr_thread_rwlock.h>
 
 #include "mrcp_sofiasip_client_agent.h"
 #include "mrcp_session.h"
 #include "mrcp_session_descriptor.h"
 #include "mrcp_sdp.h"
 #include "apt_log.h"
+#include "apt_timer_queue.h"
 
 struct mrcp_sofia_agent_t {
 	mrcp_sig_agent_t           *sig_agent;
@@ -49,6 +55,11 @@ struct mrcp_sofia_agent_t {
 
 	su_root_t                  *root;
 	nua_t                      *nua;
+
+	apr_thread_t               *progress_timers_poller;
+	apt_timer_queue_t          *progress_timers_queue;
+	apr_thread_rwlock_t        *progress_timers_queue_rwlock;
+	apt_bool_t                  timer_poller_close;
 };
 
 struct mrcp_sofia_session_t {
@@ -62,6 +73,8 @@ struct mrcp_sofia_session_t {
 	apt_bool_t                 terminate_requested;
 	mrcp_session_descriptor_t *descriptor;
 	apr_thread_mutex_t        *mutex;
+
+	apt_timer_t               *progress_timer;
 };
 
 /* Task Interface */
@@ -96,6 +109,10 @@ static void mrcp_sofia_event_callback( nua_event_t           nua_event,
 
 apt_bool_t mrcp_sofiasip_log_init(const char *name, const char *level_str, apt_bool_t redirect);
 
+static void progress_timers_related_create(mrcp_sofia_agent_t *sofia_agent, apr_pool_t *pool);
+static void *progress_timers_poll(struct apr_thread_t *, void *);
+static void on_progress_timer_tick(apt_timer_t *timer, void *obj);
+
 /** Create Sofia-SIP Signaling Agent */
 MRCP_DECLARE(mrcp_sig_agent_t*) mrcp_sofiasip_client_agent_create(const char *id, mrcp_sofia_client_config_t *config, apr_pool_t *pool)
 {
@@ -108,8 +125,19 @@ MRCP_DECLARE(mrcp_sig_agent_t*) mrcp_sofiasip_client_agent_create(const char *id
 	sofia_agent->root = NULL;
 	sofia_agent->nua = NULL;
 
+	sofia_agent->progress_timers_poller = NULL;
+	sofia_agent->progress_timers_queue = NULL;
+	sofia_agent->progress_timers_queue_rwlock = NULL;
+	sofia_agent->timer_poller_close = FALSE;
+
 	if(mrcp_sofia_config_validate(sofia_agent,config,pool) == FALSE) {
 		return NULL;
+	}
+
+	if (config->sofia_progress_timeout) {
+		progress_timers_related_create(sofia_agent, pool);
+	} else {
+		apt_log(APT_LOG_MARK, APT_PRIO_NOTICE, "[%s] Progress timer is 0, will disable all session progress timer", id);
 	}
 
 	task = apt_task_create(sofia_agent,NULL,pool);
@@ -149,6 +177,9 @@ MRCP_DECLARE(mrcp_sofia_client_config_t*) mrcp_sofiasip_client_config_alloc(apr_
 
 	config->tport_log = FALSE;
 	config->tport_dump_file = NULL;
+	config->sofia_progress_timeout = 60000;
+
+	config->sofia_all_debug = FALSE;
 
 	return config;
 }
@@ -189,6 +220,45 @@ static apt_bool_t mrcp_sofia_config_validate(mrcp_sofia_agent_t *sofia_agent, mr
 	return TRUE;
 }
 
+/* This function is not safe enough, but can be used here, you must make sure `orig' is a standard c-string */
+static void std2apr_fmt(char *dest, char const *orig)
+{
+	char *p;
+	int i = 0;
+	int pre_pct = 0;
+	for (p = orig; *p; ++p) {
+		dest[i] = *p;
+		if (pre_pct && *p == 'p') {
+			dest[++i] = 'p'; /* %p => %pp */
+		}
+		pre_pct = *p == '%' ? 1 : 0;
+		++i;
+	}
+}
+
+static void logger(void *arg, char const *fmt, va_list ap)
+{
+	if (!fmt) return;
+	char fmt_dup[4095] = {0}; /* the length of format should less than mod_unimrcp buffer */
+
+	/* apr_vformatter '%p' is not correct, but sofia-sip use `vfprintf', so should use %pp instead %p */
+	/* see: https://www.ibm.com/docs/api/v1/content/ssw_ibm_i_73/rzaie/apr_core_api/group__apr__lib.html#ga3 */
+	std2apr_fmt(fmt_dup, fmt);
+
+	apt_va_log(APT_LOG_MARK, APT_PRIO_DEBUG, fmt_dup, ap);
+}
+
+extern su_log_t tport_log[];
+extern su_log_t iptsec_log[];
+extern su_log_t nea_log[];
+extern su_log_t nta_log[];
+extern su_log_t nth_client_log[];
+extern su_log_t nth_server_log[];
+extern su_log_t nua_log[];
+extern su_log_t soa_log[];
+extern su_log_t sresolv_log[];
+extern su_log_t su_log_default[];
+
 static void mrcp_sofia_task_initialize(apt_task_t *task)
 {
 	mrcp_sofia_agent_t *sofia_agent = apt_task_object_get(task);
@@ -196,6 +266,31 @@ static void mrcp_sofia_task_initialize(apt_task_t *task)
 
 	/* Initialize Sofia-SIP library and create event loop */
 	su_init();
+
+	/* Redirect loggers in sofia */
+	if (sofia_agent && sofia_agent->config->sofia_all_debug == TRUE) {
+		su_log_redirect(su_log_default, logger, NULL);
+		su_log_redirect(tport_log, logger, NULL);
+		su_log_redirect(iptsec_log, logger, NULL);
+		su_log_redirect(nea_log, logger, NULL);
+		su_log_redirect(nta_log, logger, NULL);
+		su_log_redirect(nth_client_log, logger, NULL);
+		su_log_redirect(nth_server_log, logger, NULL);
+		su_log_redirect(nua_log, logger, NULL);
+		su_log_redirect(soa_log, logger, NULL);
+		su_log_redirect(sresolv_log, logger, NULL);
+		su_log_set_level(su_log_default, 9);
+		su_log_set_level(tport_log, 9);
+		su_log_set_level(iptsec_log, 9);
+		su_log_set_level(nea_log, 9);
+		su_log_set_level(nta_log, 9);
+		su_log_set_level(nth_client_log, 9);
+		su_log_set_level(nth_server_log, 9);
+		su_log_set_level(nua_log, 9);
+		su_log_set_level(soa_log, 9);
+		su_log_set_level(sresolv_log, 9);
+	}
+
 	sofia_agent->root = su_root_create(NULL);
 
 	/* Create a user agent instance. The stack will call the 'event_callback()' 
@@ -278,6 +373,7 @@ static apt_bool_t mrcp_sofia_session_create(mrcp_session_t *session, const mrcp_
 	sofia_session->sip_settings = settings;
 	sofia_session->terminate_requested = FALSE;
 	sofia_session->descriptor = NULL;
+	sofia_session->progress_timer = NULL;
 	session->obj = sofia_session;
 
 	if(settings->user_name && *settings->user_name != '\0') {
@@ -336,12 +432,13 @@ static apt_bool_t mrcp_sofia_session_offer(mrcp_session_t *session, mrcp_session
 	const char *local_sdp_str = NULL;
 	apt_bool_t res = FALSE;
 	mrcp_sofia_session_t *sofia_session = session->obj;
+	mrcp_sofia_agent_t *sofia_agent;
 	if(!sofia_session) {
 		return FALSE;
 	}
 
 	if(session->signaling_agent) {
-		mrcp_sofia_agent_t *sofia_agent = mrcp_sofia_agent_get(session);
+		sofia_agent = mrcp_sofia_agent_get(session);
 		if(sofia_agent) {
 			if(sofia_agent->config->origin) {
 				apt_string_set(&descriptor->origin,sofia_agent->config->origin);
@@ -353,20 +450,46 @@ static apt_bool_t mrcp_sofia_session_offer(mrcp_session_t *session, mrcp_session
 		sofia_session->descriptor = descriptor;
 		apt_obj_log(APT_LOG_MARK,APT_PRIO_INFO,session->log_obj,"Local SDP "APT_NAMESID_FMT"\n%s", 
 			session->name,
-			MRCP_SESSION_SID(session), 
+			MRCP_SESSION_SID(session),
 			local_sdp_str);
+	}
+
+	/*
+	 * NOTE: nua_invite asynchronized error
+	 * create timer before nua_invite for avoid progress timer not created but
+	 * nua callback called already, which will pass NULL to function apt_timer_kill()
+	 * and make whole process core dump
+	 */
+	if (sofia_agent && sofia_agent->progress_timers_poller) {
+		sofia_session->progress_timer = apt_timer_create(sofia_agent->progress_timers_queue, on_progress_timer_tick,
+				sofia_session, sofia_session->session->pool /* correct? */);
+		apr_thread_rwlock_wrlock(sofia_agent->progress_timers_queue_rwlock);
+		apt_timer_set(sofia_session->progress_timer, sofia_agent->config->sofia_progress_timeout);
+		apr_thread_rwlock_unlock(sofia_agent->progress_timers_queue_rwlock);
+		apt_log(APT_LOG_MARK, sofia_session->progress_timer ? APT_PRIO_NOTICE : APT_PRIO_ERROR,
+				sofia_session->progress_timer ? "[%s] Create timer okay with timeout: %ld" :
+				"[%s] Create timer failed with timeout: %ld",
+				session->name, sofia_agent->config->sofia_progress_timeout);
+		res = sofia_session->progress_timer ? TRUE : FALSE;
+	} else {
+		apt_log(APT_LOG_MARK, APT_PRIO_WARNING, "[%s] Will not create timer when agent: %pp",
+				sofia_session->session->name, sofia_agent);
 	}
 
 	apr_thread_mutex_lock(sofia_session->mutex);
 
 	if(sofia_session->nh) {
-		res = TRUE;
+		/* apt_log(APT_LOG_MARK, APT_PRIO_DEBUG, "NUA Invite session timer %d ms.", sofia_timeout); */
 		nua_invite(sofia_session->nh,
+				/* NUTAG_INVITE_TIMER(sofia_timeout/1000), */
+				/* NUTAG_SESSION_TIMER(sofia_timeout/1000), */
+				/* NTATAG_TIMEOUT_408(1), */
 				TAG_IF(local_sdp_str,SOATAG_USER_SDP_STR(local_sdp_str)),
 				TAG_END());
 	}
 
 	apr_thread_mutex_unlock(sofia_session->mutex);
+
 	return res;
 }
 
@@ -463,7 +586,7 @@ static void mrcp_sofia_on_session_redirect(
 		return;
 	}
 	sip_contact = sip->sip_contact;
-	
+
 	apr_thread_mutex_lock(sofia_session->mutex);
 
 	sip_to = sip_to_create(sofia_session->home, (const url_string_t *) sip_contact->m_url); 
@@ -595,7 +718,7 @@ static void mrcp_sofia_on_resource_discover(
 }
 
 /** This callback will be called by SIP stack to process incoming events */
-static void mrcp_sofia_event_callback( 
+static void mrcp_sofia_event_callback(
 						nua_event_t           nua_event,
 						int                   status,
 						char const           *phrase,
@@ -606,32 +729,154 @@ static void mrcp_sofia_event_callback(
 						sip_t const          *sip,
 						tagi_t                tags[])
 {
-	apt_log(APT_LOG_MARK,APT_PRIO_INFO,"Receive SIP Event [%s] Status %d %s [%s]",
+	apt_log(APT_LOG_MARK,APT_PRIO_INFO,"[%s] Receive SIP Event [%s] Status %d %s [%s]",
+		sofia_session ? sofia_session->session->name : "No-Session",
 		nua_event_name(nua_event),
 		status,
 		phrase,
 		sofia_agent->sig_agent->id);
-
-	switch(nua_event) {
+	switch (nua_event) {
 		case nua_i_state:
-			mrcp_sofia_on_state_change(status,sofia_agent,nh,sofia_session,sip,tags);
+			mrcp_sofia_on_state_change(status, sofia_agent, nh, sofia_session, sip, tags);
 			break;
 		case nua_r_invite:
-			if(status >= 300 && status < 400) {
-				mrcp_sofia_on_session_redirect(status,sofia_agent,nh,sofia_session,sip,tags);
+			if (status >= 200 && sofia_agent->progress_timers_poller && sofia_session->progress_timer) {
+				/* No matter what kind of INVITE finial response (status code 200-699) receive, kill timer */
+				apt_log(APT_LOG_MARK, APT_PRIO_DEBUG, "[%s] %d received, kill progress timer", sofia_session->session->name, status);
+				apr_thread_rwlock_wrlock(sofia_agent->progress_timers_queue_rwlock);
+				apt_timer_kill(sofia_session->progress_timer);
+				apr_thread_rwlock_unlock(sofia_agent->progress_timers_queue_rwlock);
+				apt_log(APT_LOG_MARK, APT_PRIO_DEBUG, "[%s] %d received, kill progress timer done", sofia_session->session->name, status);
+				sofia_session->progress_timer = NULL;
+			}
+			if (status >= 300 && status < 400) {
+				mrcp_sofia_on_session_redirect(status, sofia_agent, nh, sofia_session, sip, tags);
 			}
 			break;
 		case nua_r_options:
-			mrcp_sofia_on_resource_discover(status,sofia_agent,nh,sofia_session,sip,tags);
+			mrcp_sofia_on_resource_discover(status, sofia_agent, nh, sofia_session, sip, tags);
+			break;
+		case nua_r_cancel:
+			apt_log(APT_LOG_MARK, APT_PRIO_WARNING, "[%s] Progress timeout cancel result received: %d", sofia_session->session->name, status);
 			break;
 		case nua_r_shutdown:
 			/* if status < 200, shutdown still in progress */
-			if(status >= 200) {
+			if (status >= 200) {
 				/* break main loop of sofia thread */
 				su_root_break(sofia_agent->root);
 			}
 			break;
-		default: 
+		default:
 			break;
 	}
+}
+
+static void progress_timers_related_create(mrcp_sofia_agent_t *sofia_agent, apr_pool_t *pool)
+{
+	if (apr_thread_rwlock_create(&sofia_agent->progress_timers_queue_rwlock, pool) != APR_SUCCESS) {
+		apt_log(APT_LOG_MARK, APT_PRIO_ERROR,
+				"[%s] Error when create progress timer mutex, will disbale all session progress timer",
+				sofia_agent->sig_agent->id);
+		goto error;
+	}
+	sofia_agent->progress_timers_queue = apt_timer_queue_create(pool);
+	if (!sofia_agent->progress_timers_queue) {
+		apt_log(APT_LOG_MARK, APT_PRIO_ERROR,
+				"[%s] Error when create progress timer queue, will disable all session progress timer",
+				sofia_agent->sig_agent->id);
+		goto error;
+	}
+	if (apr_thread_create(&sofia_agent->progress_timers_poller, NULL, progress_timers_poll, sofia_agent,
+				pool) != APR_SUCCESS) {
+		apt_log(APT_LOG_MARK, APT_PRIO_ERROR,
+				"[%s] Error when create progress timer thread, will disbale all session progress timer",
+				sofia_agent->sig_agent->id);
+		goto error;
+	}
+
+	return;
+
+error:
+	if (sofia_agent->progress_timers_queue_rwlock) {
+		sofia_agent->progress_timers_queue_rwlock = NULL;
+	}
+	if (sofia_agent->progress_timers_queue) {
+		apt_timer_queue_destroy(sofia_agent->progress_timers_queue);
+		sofia_agent->progress_timers_queue = NULL;
+	}
+	if (sofia_agent->progress_timers_poller) {
+		sofia_agent->timer_poller_close = TRUE;
+		sofia_agent->progress_timers_poller = NULL;
+	}
+}
+
+static void on_progress_timer_tick(apt_timer_t *timer, void *obj)
+{
+	mrcp_sofia_session_t *sofia_session = (mrcp_sofia_session_t *)obj;
+	apt_log(APT_LOG_MARK, APT_PRIO_WARNING, "[%s] MRCP sofia progress timer ticks, session stuck !!!",
+			sofia_session->session->name);
+	nua_cancel(sofia_session->nh, SIPTAG_REASON_STR("MRCP sofia progress timeout"), TAG_END());
+}
+
+static void *progress_timers_poll(struct apr_thread_t *thread, void *data)
+{
+	mrcp_sofia_agent_t *sofia_agent = (mrcp_sofia_agent_t *)data;
+
+	/* all these are GMT time with accuracy millisecond */
+	apr_uint32_t queue_timeout;
+	apr_time_t time_last;
+	apr_time_t time_now;
+
+	apt_bool_t res;
+	int i=0, j=0;
+	for (; /* void */; j=i) {
+		apr_thread_rwlock_rdlock(sofia_agent->progress_timers_queue_rwlock);
+		res = apt_timer_queue_timeout_get(sofia_agent->progress_timers_queue, &queue_timeout);
+		apr_thread_rwlock_unlock(sofia_agent->progress_timers_queue_rwlock);
+		if (res == TRUE) {
+			/* Queue timeout is the left time of the latest timer */
+			time_last = apr_time_now() / 1000;
+			i=0;
+		} else {
+			/* Timer ring queue is empty */
+			queue_timeout = -1;
+			++i;
+		}
+
+		if (i == 60) {
+			/* empty for 60 seconds */
+			apt_log(APT_LOG_MARK, APT_PRIO_NOTICE, "[%s] Progress timer queue empty for 60 seconds",
+					sofia_agent->sig_agent->id);
+			i = 0;
+		} else if (j != 0 && i == 0) {
+			/* changed */
+			apt_log(APT_LOG_MARK, APT_PRIO_NOTICE, "[%s] Progress Timer queue changed from empty to not",
+					sofia_agent->sig_agent->id);
+		}
+
+		/* TODO: Make quit forloop <2023-06-07, genmzy> */
+		apr_thread_rwlock_rdlock(sofia_agent->progress_timers_queue_rwlock);
+		if (apt_timer_queue_is_empty(sofia_agent->progress_timers_queue) == TRUE &&
+				sofia_agent->timer_poller_close == TRUE) {
+			apt_log(APT_LOG_MARK, APT_PRIO_NOTICE,
+					"[%s] Both delayed close and prgress timer queue empty satisfied, timer poller quiting now",
+					sofia_agent->sig_agent->id);
+			break;
+		}
+		apr_thread_rwlock_unlock(sofia_agent->progress_timers_queue_rwlock);
+
+		apr_sleep(1000000L); /* sleep 1 second */
+
+		if (queue_timeout != -1) { /* Timer ring queue is not empty */
+			time_now = apr_time_now() / 1000;
+			apr_size_t diff = time_now - time_last;
+			apr_thread_rwlock_wrlock(sofia_agent->progress_timers_queue_rwlock);
+			apt_timer_queue_advance(sofia_agent->progress_timers_queue, diff);
+			apr_thread_rwlock_unlock(sofia_agent->progress_timers_queue_rwlock);
+		}
+	}
+
+	apr_thread_rwlock_unlock(sofia_agent->progress_timers_queue_rwlock);
+	apt_timer_queue_destroy(sofia_agent->progress_timers_queue);
+	return NULL;
 }

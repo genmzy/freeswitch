@@ -88,6 +88,7 @@ SWITCH_DECLARE(switch_status_t) switch_core_asr_open(switch_asr_handle_t *ah,
 	status = ah->asr_interface->asr_open(ah, codec, rate, dest, flags);
 
 	if (status != SWITCH_STATUS_SUCCESS) {
+		ah->asr_interface->asr_close(ah, flags);
 		if (switch_test_flag(ah, SWITCH_ASR_FLAG_FREE_POOL)) {
 			switch_core_destroy_memory_pool(&ah->memory_pool);
 		}

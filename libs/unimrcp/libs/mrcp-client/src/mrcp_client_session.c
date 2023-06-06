@@ -300,7 +300,7 @@ apt_bool_t mrcp_client_on_channel_add(mrcp_channel_t *channel, mrcp_control_desc
 	channel->waiting_for_channel = FALSE;
 	if(mrcp_client_session_subrequest_remove(session) == TRUE) {
 		/* send offer to server */
-		mrcp_client_session_offer_send(session);
+		return mrcp_client_session_offer_send(session);
 	}
 	return TRUE;
 }
@@ -808,7 +808,7 @@ static apt_bool_t mrcp_client_channel_add(mrcp_client_session_t *session, mrcp_c
 	channel->rtp_termination_slot = slot;
 
 	if(!session->subrequest_count) {
-		/* send offer to server */
+		/* send invite offer to server */
 		mrcp_client_session_offer_send(session);
 	}
 	return TRUE;

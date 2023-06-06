@@ -60,6 +60,15 @@ struct mrcp_sofia_client_config_t {
 	apt_bool_t tport_log;
 	/** Dump SIP messages to the specified file */
 	char      *tport_dump_file;
+
+	/*
+	 * In millisecond, can only promise okay on 64-bit machine now,
+	 * default 60000. 0 will not create any progress timer thread for this agent and
+	 * will make session stuck when INVITE-100 but no further response received
+	 */
+	apr_size_t sofia_progress_timeout;
+
+	apt_bool_t sofia_all_debug;
 };
 
 /**

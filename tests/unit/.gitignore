@@ -48,3 +48,5 @@ Makefile
 conf/*/
 conf_playsay/*/
 conf_async/*/
+switch_core_asr
+switch_sip

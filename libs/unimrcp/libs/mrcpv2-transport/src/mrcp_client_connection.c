@@ -301,6 +301,7 @@ static mrcp_connection_t* mrcp_client_agent_connection_create(mrcp_connection_ag
 		return NULL;
 	}
 
+	/* set socket block */
 	apr_socket_opt_set(connection->sock, APR_SO_NONBLOCK, 0);
 	apr_socket_timeout_set(connection->sock, -1);
 	apr_socket_opt_set(connection->sock, APR_SO_REUSEADDR, 1);
@@ -366,6 +367,24 @@ static mrcp_connection_t* mrcp_client_agent_connection_find(mrcp_connection_agen
 	for(connection = APR_RING_FIRST(&agent->connection_list);
 			connection != APR_RING_SENTINEL(&agent->connection_list, mrcp_connection_t, link);
 				connection = APR_RING_NEXT(connection, link)) {
+		/*
+			unimrcp commit 16185557194726d35831faf020d1fc92c2703f4a:
+
+				While trying to find an existing client connection,
+			do not observe instances with closed socket. Addresses issue #259
+				Assume a scenario where an MRCPv2 connection is unexpectedly closed by the server.
+			In such an event, the client stack raises an event to the application to terminate activities and
+			release all the associated resources.
+				Now, what if the application does not handle such an event accordingly and attempts to
+			use an existing connection for consecutive requests. As a result, the closed but not
+			properly released connection could unconditionally be picked up by the client stack.
+				The change allows to use a new connection in such a state. Note that the existing closed
+			connection would remain in the memory until all the associated channels are closed by the application.
+		*/
+		/* do not observe connections with closed socket */
+		if(!connection->sock)
+			continue;
+
 		if(apr_sockaddr_info_get(&sockaddr,descriptor->ip.buf,APR_INET,descriptor->port,0,connection->pool) == APR_SUCCESS) {
 			if(apr_sockaddr_equal(sockaddr,connection->r_sockaddr) != 0 && 
 				descriptor->port == connection->r_sockaddr->port) {

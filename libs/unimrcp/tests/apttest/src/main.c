@@ -22,12 +22,16 @@
 apt_test_suite_t* task_test_suite_create(apr_pool_t *pool);
 apt_test_suite_t* consumer_task_test_suite_create(apr_pool_t *pool);
 apt_test_suite_t* multipart_test_suite_create(apr_pool_t *pool);
+apt_test_suite_t* timer_test_suite_create(apr_pool_t *pool);
+apt_test_suite_t* string_test_suite_create(apr_pool_t *pool);
 
 int main(int argc, const char * const *argv)
 {
 	apt_test_framework_t *test_framework;
 	apt_test_suite_t *test_suite;
 	apr_pool_t *pool;
+
+	apt_log_priority_set(APT_PRIO_DEBUG);
 	
 	/* one time apr global initialization */
 	if(apr_initialize() != APR_SUCCESS) {
@@ -40,13 +44,19 @@ int main(int argc, const char * const *argv)
 
 	/* create test suites and add them to test framework */
 	test_suite = task_test_suite_create(pool);
-	apt_test_framework_suite_add(test_framework,test_suite);
+	apt_test_framework_suite_add(test_framework, test_suite);
 
 	test_suite = consumer_task_test_suite_create(pool);
-	apt_test_framework_suite_add(test_framework,test_suite);
+	apt_test_framework_suite_add(test_framework, test_suite);
 
 	test_suite = multipart_test_suite_create(pool);
-	apt_test_framework_suite_add(test_framework,test_suite);
+	apt_test_framework_suite_add(test_framework, test_suite);
+
+	test_suite = timer_test_suite_create(pool);
+	apt_test_framework_suite_add(test_framework, test_suite);
+
+	test_suite = string_test_suite_create(pool);
+	apt_test_framework_suite_add(test_framework, test_suite);
 
 	/* run tests */
 	apt_test_framework_run(test_framework,argc,argv);

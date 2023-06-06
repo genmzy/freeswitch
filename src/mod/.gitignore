@@ -91,3 +91,4 @@ languages/mod_managed/Win32/
 /languages/mod_lua/test/Makefile.in
 /languages/mod_lua/test/test_mod_lua
 					
+compile_commands.json

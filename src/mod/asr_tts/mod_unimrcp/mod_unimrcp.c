@@ -193,7 +193,7 @@ SWITCH_MODULE_RUNTIME_FUNCTION(mod_unimrcp_runtime);
 SWITCH_MODULE_LOAD_FUNCTION(mod_unimrcp_load);
 SWITCH_MODULE_DEFINITION(mod_unimrcp, mod_unimrcp_load, mod_unimrcp_shutdown, NULL);
 
-static switch_status_t mod_unimrcp_do_config();
+static switch_status_t mod_unimrcp_do_config(void);
 static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool);
 static int process_rtp_config(mrcp_client_t *client, mpf_rtp_config_t *rtp_config, mpf_rtp_settings_t *rtp_settings, const char *param, const char *val, apr_pool_t *pool);
 static int process_mrcpv1_config(rtsp_client_config_t *config, mrcp_sig_settings_t *sig_settings, const char *param, const char *val, apr_pool_t *pool);
@@ -391,7 +391,7 @@ static const char *speech_channel_type_to_string(speech_channel_type_t type);
 #define MIME_TYPE_PLAIN_TEXT "text/plain"
 
 static switch_status_t synth_load(switch_loadable_module_interface_t *module_interface, switch_memory_pool_t *pool);
-static switch_status_t synth_shutdown();
+static switch_status_t synth_shutdown(void);
 
 /* synthesizer's interface for FreeSWITCH */
 static switch_status_t synth_speech_open(switch_speech_handle_t *sh, const char *voice_name, int rate, int channels, switch_speech_flag_t *flags);
@@ -487,7 +487,7 @@ struct recognizer_data {
 typedef struct recognizer_data recognizer_data_t;
 
 static switch_status_t recog_load(switch_loadable_module_interface_t *module_interface, switch_memory_pool_t *pool);
-static switch_status_t recog_shutdown();
+static switch_status_t recog_shutdown(void);
 
 /* recognizer's interface for FreeSWITCH */
 static switch_status_t recog_asr_open(switch_asr_handle_t *ah, const char *codec, int rate, const char *dest, switch_asr_flag_t *flags);
@@ -1009,7 +1009,7 @@ static switch_status_t speech_channel_open(speech_channel_t *schannel, profile_t
 	schannel->profile = profile;
 
 	/* create MRCP session */
-	if ((schannel->unimrcp_session = mrcp_application_session_create(schannel->application->app, profile->name, schannel)) == NULL) {
+	if ((schannel->unimrcp_session = mrcp_application_session_create(schannel->application->app, profile->name, schannel)) == NULL) { // genmzy: ea session sequence 1st step
 		/* profile doesn't exist? */
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(schannel->session_uuid), SWITCH_LOG_ERROR, "(%s) Unable to create session with %s\n", schannel->name, profile->name);
 		status = SWITCH_STATUS_RESTART;
@@ -1037,7 +1037,7 @@ static switch_status_t speech_channel_open(speech_channel_t *schannel, profile_t
 	}
 
 	/* add channel to session... this establishes the connection to the MRCP server */
-	if (mrcp_application_channel_add(schannel->unimrcp_session, schannel->unimrcp_channel) != TRUE) {
+	if (mrcp_application_channel_add(schannel->unimrcp_session, schannel->unimrcp_channel) != TRUE) { // genmzy: ea session sequence 2nd step
 		switch_log_printf(SWITCH_CHANNEL_UUID_LOG(schannel->session_uuid), SWITCH_LOG_ERROR, "(%s) Unable to add channel to session with %s\n", schannel->name, profile->name);
 		mrcp_application_session_destroy(schannel->unimrcp_session);
 		status = SWITCH_STATUS_FALSE;
@@ -1578,6 +1578,7 @@ static switch_status_t speech_channel_set_state_unlocked(speech_channel_t *schan
 	switch_log_printf(SWITCH_CHANNEL_UUID_LOG(schannel->session_uuid), SWITCH_LOG_DEBUG, "(%s) %s ==> %s\n", schannel->name, speech_channel_state_to_string(schannel->state),
 					  speech_channel_state_to_string(state));
 	schannel->state = state;
+	/* notify all condition wait thread to know that state have be changed */
 	switch_thread_cond_signal(schannel->cond);
 	return SWITCH_STATUS_SUCCESS;
 }
@@ -2103,7 +2104,7 @@ static switch_status_t synth_load(switch_loadable_module_interface_t *module_int
  *
  * @return SWITCH_STATUS_SUCCESS
  */
-static switch_status_t synth_shutdown()
+static switch_status_t synth_shutdown(void)
 {
 	if (globals.synth.fs_param_map) {
 		switch_core_hash_destroy(&globals.synth.fs_param_map);
@@ -3803,7 +3804,7 @@ static switch_status_t recog_load(switch_loadable_module_interface_t *module_int
 	globals.recog.audio_stream_vtable.open_tx = NULL;
 	globals.recog.audio_stream_vtable.close_tx = NULL;
 	globals.recog.audio_stream_vtable.write_frame = NULL;
-	mrcp_client_application_register(globals.mrcp_client, globals.recog.app, "recog");
+	mrcp_client_application_register(globals.mrcp_client, globals.recog.app, "recog"); // genmzy: ea activity 6th step
 
 	/* map FreeSWITCH params or old params to MRCPv2 param */
 	switch_core_hash_init_nocase(&globals.recog.fs_param_map);
@@ -3856,7 +3857,7 @@ static switch_status_t recog_load(switch_loadable_module_interface_t *module_int
 /**
  * Shutdown the recognizer
  */
-static switch_status_t recog_shutdown()
+static switch_status_t recog_shutdown(void)
 {
 	if (globals.recog.fs_param_map) {
 		switch_core_hash_destroy(&globals.recog.fs_param_map);
@@ -3873,7 +3874,7 @@ static switch_status_t recog_shutdown()
  *
  * @return SWITCH_STATUS_SUCCESS if the configuration is OK
  */
-static switch_status_t mod_unimrcp_do_config()
+static switch_status_t mod_unimrcp_do_config(void)
 {
 	switch_xml_t cfg, xml, settings;
 	switch_status_t status = SWITCH_STATUS_SUCCESS;
@@ -4069,6 +4070,10 @@ static int process_mrcpv2_config(mrcp_sofia_client_config_t *config, mrcp_sig_se
 		config->user_agent_name = apr_pstrdup(pool, val);
 	} else if (strcasecmp(param, "sdp-origin") == 0) {
 		config->origin = apr_pstrdup(pool, val);
+	} else if (strcasecmp(param, "sofia-progress-timeout") == 0) {
+		config->sofia_progress_timeout = (apr_size_t) atol(val);
+	} else if (strcasecmp(param, "sofia-all-debug") == 0) {
+		config->sofia_all_debug = switch_true(val) == SWITCH_TRUE ? TRUE : FALSE;
 	} else {
 		mine = 0;
 	}
@@ -4129,7 +4134,7 @@ static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool)
 		apt_string_set(&recog_resource, "speechrecog");
 		mrcp_resource_load(resource_loader, &recog_resource);
 		resource_factory = mrcp_resource_factory_get(resource_loader);
-		mrcp_client_resource_factory_register(client, resource_factory);
+		mrcp_client_resource_factory_register(client, resource_factory); // genmzy: ea activity second step
 	}
 
 	codec_manager = mpf_engine_codec_manager_create(pool);
@@ -4138,7 +4143,7 @@ static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool)
 		client = NULL;
 		goto done;
 	}
-	if (!mrcp_client_codec_manager_register(client, codec_manager)) {
+	if (!mrcp_client_codec_manager_register(client, codec_manager)) { // genmzy: ea not mentioned, but important
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Failed to create register MRCP client codec manager\n");
 		client = NULL;
 		goto done;
@@ -4178,7 +4183,7 @@ static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool)
 			mrcp_client_connection_timeout_set(connection_agent, request_timeout);
 		}
 	}
-	if (!mrcp_client_connection_agent_register(client, connection_agent)) {
+	if (!mrcp_client_connection_agent_register(client, connection_agent)) { // genmzy: ea activity 5th step
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Failed to create register MRCP connection agent\n");
 		client = NULL;
 		goto done;
@@ -4196,7 +4201,7 @@ static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool)
 		client = NULL;
 		goto done;
 	}
-	if (!mrcp_client_media_engine_register(client, media_engine)) {
+	if (!mrcp_client_media_engine_register(client, media_engine)) {  // genmzy: ea activity 3rd step
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_CRIT, "Failed to register MPF media engine\n");
 		client = NULL;
 		goto done;
@@ -4338,6 +4343,8 @@ static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool)
 				config->ext_ip = NULL;
 				config->user_agent_name = DEFAULT_SOFIASIP_UA_NAME;
 				config->origin = DEFAULT_SDP_ORIGIN;
+				config->sofia_progress_timeout = 60000;
+				config->sofia_all_debug = FALSE;
 				v2_profile_connection_agent = connection_agent;
 				switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Loading MRCPv2 profile: %s\n", name);
 				for (param = switch_xml_child(profile, "param"); param; param = switch_xml_next(param)) {
@@ -4376,7 +4383,7 @@ static mrcp_client_t *mod_unimrcp_client_create(switch_memory_pool_t *mod_pool)
 			mrcp_client_rtp_factory_register(client, termination_factory, name);
 			mrcp_client_rtp_settings_register(client, rtp_settings, "RTP-Settings");
 			mrcp_client_signaling_settings_register(client, sig_settings, "Signaling-Settings");
-			mrcp_client_signaling_agent_register(client, agent);
+			mrcp_client_signaling_agent_register(client, agent); // genmzy: ea activity 4th step
 
 			/* create the profile and register it */
 			mprofile = mrcp_client_profile_create(NULL, agent, v2_profile_connection_agent, media_engine, termination_factory, rtp_settings, sig_settings, pool);
@@ -4446,7 +4453,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_unimrcp_load)
 	apt_log_ext_handler_set(unimrcp_log);
 
 	/* Create the MRCP client */
-	if ((globals.mrcp_client = mod_unimrcp_client_create(pool)) == NULL) {
+	if ((globals.mrcp_client = mod_unimrcp_client_create(pool)) == NULL) { // genmzy: ea activity first step
 		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_ERROR, "Failed to create mrcp client\n");
 		return SWITCH_STATUS_FALSE;
 	}
@@ -4462,7 +4469,7 @@ SWITCH_MODULE_LOAD_FUNCTION(mod_unimrcp_load)
 	}
 
 	/* Start the client stack */
-	mrcp_client_start(globals.mrcp_client);
+	mrcp_client_start(globals.mrcp_client); // genmzy: ea activity 7th step
 
 	/* indicate that the module should continue to be loaded */
 	return SWITCH_STATUS_SUCCESS;
@@ -4533,6 +4540,7 @@ static apt_log_priority_e str_to_log_level(const char *level)
  * Connects UniMRCP logging to FreeSWITCH
  * @return TRUE
  */
+/* unimrcp_log("__no_file__", 0, NULL, APT_PRIO_DEBUG, fmt, ap) */
 static apt_bool_t unimrcp_log(const char *file, int line, const char *obj, apt_log_priority_e priority, const char *format, va_list arg_ptr)
 {
 	switch_log_level_t level;
@@ -4572,7 +4580,7 @@ static apt_bool_t unimrcp_log(const char *file, int line, const char *obj, apt_l
 	}
 
 	/* apr_vsnprintf supports format extensions required by UniMRCP */
-	apr_vsnprintf(log_message, sizeof(log_message), format, arg_ptr);
+	apr_vsnprintf(log_message, sizeof(log_message)-1, format, arg_ptr);
 	msglen = strlen(log_message);
 	if (msglen >= 2 && log_message[msglen - 2] == '\\' && log_message[msglen - 1] == 'n') {
 		/* log_message already ends in \n */

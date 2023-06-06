@@ -9,4 +9,6 @@ apttest_LDADD        = $(top_builddir)/libs/apr-toolkit/libaprtoolkit.la \
 apttest_SOURCES      = src/main.c \
                        src/task_suite.c \
                        src/consumer_task_suite.c \
-                       src/multipart_suite.c
+                       src/multipart_suite.c \
+                       src/timer_suite.c \
+                       src/string_suite.c

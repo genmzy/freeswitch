@@ -58,6 +58,19 @@ static APR_INLINE const char* apt_string_buffer_get(const apt_str_t *str)
 	return APT_EMPTY_STRING;
 }
 
+/** Safely get string buffer */
+static APR_INLINE apt_bool_t apt_string_buffer_get_safe(char *dest, const apt_str_t *str, int n)
+{
+	int i;
+	for (i = 0; i<n && i<str->length && *(str->buf+i); ++i) {
+		*(dest+i) = *(str->buf+i);
+	}
+	if (i != str->length) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
 /** Get string length. */
 static APR_INLINE apr_size_t apt_string_length_get(const apt_str_t *str)
 {

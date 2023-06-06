@@ -1667,6 +1667,9 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 
 
 	if (sofia_use_soa(tech_pvt)) {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_INFO, "use soa and with "
+				"session timeout: %d; invite timeout uint max: %s\n",
+				tech_pvt->session_timeout, sofia_test_flag(tech_pvt, TFLAG_RECOVERED) ? "true" : "false");
 		nua_invite(tech_pvt->nh,
 				   NUTAG_AUTOANSWER(0),
 				   //TAG_IF(zstr(tech_pvt->mparams.local_sdp_str), NUTAG_AUTOACK(0)),
@@ -1710,6 +1713,9 @@ switch_status_t sofia_glue_do_invite(switch_core_session_t *session)
 				   TAG_IF(!require_timer, NUTAG_TIMER_AUTOREQUIRE(0)),
 				   TAG_IF(!zstr(tech_pvt->mparams.local_sdp_str), SOATAG_HOLD(holdstr)), TAG_END());
 	} else {
+		switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(tech_pvt->session), SWITCH_LOG_INFO, "use no soa and with "
+				"session timeout: %d; invite timeout uint max: %s\n",
+				tech_pvt->session_timeout, sofia_test_flag(tech_pvt, TFLAG_RECOVERED) ? "true" : "false");
 		nua_invite(tech_pvt->nh,
 				   NUTAG_AUTOANSWER(0),
 				   NUTAG_AUTOACK(0),

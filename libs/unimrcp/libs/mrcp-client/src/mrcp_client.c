@@ -14,6 +14,7 @@
  * limitations under the License.
  * 
  * $Id: mrcp_client.c 2251 2014-11-21 02:36:44Z achaloyan@gmail.com $
+ *
  */
 
 #include <apr_thread_cond.h>
@@ -199,6 +200,7 @@ MRCP_DECLARE(mrcp_client_t*) mrcp_client_create(apt_dir_layout_t *dir_layout)
 		vtable->on_start_complete = mrcp_client_on_start_complete;
 		vtable->on_terminate_complete = mrcp_client_on_terminate_complete;
 	}
+
 
 	client->media_engine_table = apr_hash_make(client->pool);
 	client->rtp_factory_table = apr_hash_make(client->pool);
@@ -800,6 +802,7 @@ static apt_bool_t mrcp_client_msg_process(apt_task_t *task, apt_task_msg_t *msg)
 			mrcp_client_mpf_message_process(container);
 			break;
 		}
+		/* mrcp_application_channel_add */
 		case MRCP_CLIENT_APPLICATION_TASK_MSG:
 		{
 			mrcp_app_message_t **app_message = (mrcp_app_message_t**) msg->data;

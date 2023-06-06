@@ -1478,6 +1478,13 @@ static void our_sofia_event_callback(nua_event_t event,
 
 	profile->last_sip_event = switch_time_now();
 
+	/* Receive SIP Event [nua_r_invite] Status 408 Request Timeout [internal] */
+	switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_DEBUG, "Receive SIP Event [%s] Status %d %s [%s]\n",
+		nua_event_name(event),
+		status,
+		phrase,
+		profile->name);
+
 	/* sofia_private will be == &mod_sofia_globals.keep_private whenever a request is done with a new handle that has to be
 	  freed whenever the request is done */
 	if (nh && sofia_private == &mod_sofia_globals.keep_private) {
@@ -3218,6 +3225,8 @@ void *SWITCH_THREAD_FUNC sofia_profile_thread_run(switch_thread_t *thread, void 
 #endif
 
 	do {
+		switch_log_printf(SWITCH_CHANNEL_LOG, SWITCH_LOG_NOTICE, "Creaing profile nua "
+				"t1: %d; t2: %d; t4: %d; t1x64: %d\n", profile->timer_t1, profile->timer_t2, profile->timer_t4, profile->timer_t1x64);
 		profile->nua = nua_create(profile->s_root,	/* Event loop */
 								  sofia_event_callback,	/* Callback for processing events */
 								  profile,	/* Additional data to pass to callback */

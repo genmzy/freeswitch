@@ -3280,6 +3280,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 						goto notready;
 					}
 
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "genmzy: session elapsed: %ld\n", elapsed);
 					switch_cond_next();
 				}
 
@@ -3334,6 +3335,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 				}
 
 				check_per_channel_timeouts(&oglobals, and_argc, start, &force_reason);
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "genmzy: check channel timeout force_reason: %s\n", switch_channel_cause2str(force_reason));
 
 				if (oglobals.session) {
 					switch_ivr_parse_all_events(oglobals.session);
@@ -3349,6 +3351,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 
 				if ((to = (uint8_t) (elapsed >= (time_t) timelimit_sec)) || (fail_on_single_reject && oglobals.hups)) {
 					int ok = 0;
+					switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "genmzy: elapsed bigger than timelimit_sec\n");
 
 					if (fail_on_single_reject_var) {
 						if (!switch_true(fail_on_single_reject_var)) {
@@ -3583,6 +3586,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_originate(switch_core_session_t *sess
 			}
 
 			if (caller_channel && !switch_channel_ready(caller_channel) && !switch_channel_test_flag(caller_channel, CF_XFER_ZOMBIE)) {
+				switch_log_printf(SWITCH_CHANNEL_SESSION_LOG(session), SWITCH_LOG_DEBUG, "will make index cancel\n");
 				oglobals.idx = IDX_CANCEL;
 			}
 

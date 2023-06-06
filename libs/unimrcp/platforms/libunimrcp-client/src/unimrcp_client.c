@@ -20,6 +20,7 @@
 #include <apr_xml.h>
 #include <apr_fnmatch.h>
 #include <apr_version.h>
+#include "apt_text_stream.h"
 #include "uni_version.h"
 #include "uni_revision.h"
 #include "unimrcp_client.h"
@@ -176,6 +177,13 @@ static APR_INLINE const char* cdata_text_get(const apr_xml_elem *elem)
 static APR_INLINE apt_bool_t cdata_bool_get(const apr_xml_elem *elem)
 {
 	return (strcasecmp(elem->first_cdata.first->text,"true") == 0) ? TRUE : FALSE;
+}
+
+static APR_INLINE apr_size_t cdata_size_get(const apr_xml_elem *elem)
+{
+	apt_str_t str = {NULL, 0};
+	apt_string_set(&str, elem->first_cdata.first->text);
+	return apt_size_value_parse(&str);
 }
 
 /** Copy cdata */
@@ -436,6 +444,15 @@ static apt_bool_t unimrcp_client_sip_uac_load(unimrcp_client_loader_t *loader, c
 				else
 					config->tport_dump_file = cdata_copy(elem,loader->pool);
 			}
+		} else if (strcasecmp(elem->name, "sofia-progress-timeout") == 0) {
+			if (is_cdata_valid(elem) == TRUE) {
+				config->sofia_progress_timeout = cdata_size_get(elem);
+			} else {
+				config->sofia_progress_timeout = 60000;
+			}
+		} else if (strcasecmp(elem->name, "sofia-all-debug") == 0) {
+			config->sofia_all_debug = is_cdata_valid(elem) == TRUE &&
+				!strcasecmp(elem->name, "true") ? TRUE : FALSE;
 		}
 		else {
 			apt_log(APT_LOG_MARK,APT_PRIO_WARNING,"Unknown Element <%s>",elem->name);
