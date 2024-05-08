@@ -285,3 +285,4 @@ src/mod/endpoints/mod_sofia/test/sipp-based-tests
 compile_commands.json
 conftestval
 confdefs.h
+.clangd

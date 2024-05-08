@@ -318,7 +318,7 @@ SWITCH_DECLARE(switch_status_t) switch_ivr_sleep(switch_core_session_t *session,
 	}
 
 
- end:
+end:
 
 	switch_channel_clear_flag(channel, CF_VIDEO_BLANK);
 
